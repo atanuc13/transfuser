@@ -1,8 +1,10 @@
 import math
 import torch
 from torch import nn
+import torchvision
 import torch.nn.functional as F
 import timm
+from collections import OrderedDict
 
 class TransfuserBackbone(nn.Module):
     """
@@ -97,23 +99,34 @@ class TransfuserBackbone(nn.Module):
             self.change_channel_conv_lidar = nn.Sequential()
 
         # FPN fusion
-        channel = self.config.bev_features_chanels
-        self.relu = nn.ReLU(inplace=True)
-        # top down
-        self.upsample = nn.Upsample(scale_factor=self.config.bev_upsample_factor, mode='bilinear', align_corners=False)
-        self.up_conv5 = nn.Conv2d(channel, channel, (1, 1))
-        self.up_conv4 = nn.Conv2d(channel, channel, (1, 1))
-        self.up_conv3 = nn.Conv2d(channel, channel, (1, 1))
-        
-        # lateral
-        self.c5_conv = nn.Conv2d(self.config.perception_output_features, channel, (1, 1))
+        self.head = self.config.head
+        if self.head == 'dyhead':
+            self.pyramid = torchvision.ops.FeaturePyramidNetwork(self.config.dyHead_config['in_channels'], self.config.dyHead_config['out_channel'])
+        else:
+            channel = self.config.bev_features_chanels
+            self.relu = nn.ReLU(inplace=True)
+            # top down
+            self.upsample = nn.Upsample(scale_factor=self.config.bev_upsample_factor, mode='bilinear', align_corners=False)
+            self.up_conv5 = nn.Conv2d(channel, channel, (1, 1))
+            self.up_conv4 = nn.Conv2d(channel, channel, (1, 1))
+            self.up_conv3 = nn.Conv2d(channel, channel, (1, 1))
+            
+            # lateral
+            self.c5_conv = nn.Conv2d(self.config.perception_output_features, channel, (1, 1))
         
     def top_down(self, x):
 
-        p5 = self.relu(self.c5_conv(x))
-        p4 = self.relu(self.up_conv5(self.upsample(p5)))
-        p3 = self.relu(self.up_conv4(self.upsample(p4)))
-        p2 = self.relu(self.up_conv3(self.upsample(p3)))
+        if self.head == 'dyhead':
+            fpn_output = [v for k,v in self.pyramid(x).items()]
+            p5 = fpn_output[3]
+            p4 = fpn_output[2]
+            p3 = fpn_output[1]
+            p2 = fpn_output[0]
+        else:
+            p5 = self.relu(self.c5_conv(x))  # 8 8 64
+            p4 = self.relu(self.up_conv5(self.upsample(p5))) #16 16 64
+            p3 = self.relu(self.up_conv4(self.upsample(p4))) #32 32 64
+            p2 = self.relu(self.up_conv3(self.upsample(p3))) #64 64 64
         
         return p2, p3, p4, p5
 
@@ -132,6 +145,8 @@ class TransfuserBackbone(nn.Module):
             image_tensor = image
 
         lidar_tensor = lidar
+
+        lidar_features_output = []
 
         image_features = self.image_encoder.features.conv1(image_tensor)
         image_features = self.image_encoder.features.bn1(image_features)
@@ -155,6 +170,7 @@ class TransfuserBackbone(nn.Module):
         lidar_features_layer1 = F.interpolate(lidar_features_layer1, size=(lidar_features.shape[2],lidar_features.shape[3]), mode='bilinear', align_corners=False)
         image_features = image_features + image_features_layer1
         lidar_features = lidar_features + lidar_features_layer1
+        lidar_features_output.append(lidar_features)
 
         image_features = self.image_encoder.features.layer2(image_features)
         lidar_features = self.lidar_encoder._model.layer2(lidar_features)
@@ -167,6 +183,7 @@ class TransfuserBackbone(nn.Module):
         lidar_features_layer2 = F.interpolate(lidar_features_layer2, size=(lidar_features.shape[2],lidar_features.shape[3]), mode='bilinear', align_corners=False)
         image_features = image_features + image_features_layer2
         lidar_features = lidar_features + lidar_features_layer2
+        lidar_features_output.append(lidar_features)
 
         image_features = self.image_encoder.features.layer3(image_features)
         lidar_features = self.lidar_encoder._model.layer3(lidar_features)
@@ -179,6 +196,7 @@ class TransfuserBackbone(nn.Module):
         lidar_features_layer3 = F.interpolate(lidar_features_layer3, size=(lidar_features.shape[2],lidar_features.shape[3]), mode='bilinear', align_corners=False)
         image_features = image_features + image_features_layer3
         lidar_features = lidar_features + lidar_features_layer3
+        lidar_features_output.append(lidar_features)
 
         image_features = self.image_encoder.features.layer4(image_features)
         lidar_features = self.lidar_encoder._model.layer4(lidar_features)
@@ -192,6 +210,7 @@ class TransfuserBackbone(nn.Module):
         lidar_features_layer4 = F.interpolate(lidar_features_layer4, size=(lidar_features.shape[2],lidar_features.shape[3]), mode='bilinear', align_corners=False)
         image_features = image_features + image_features_layer4
         lidar_features = lidar_features + lidar_features_layer4
+        lidar_features_output.append(lidar_features)
 
         # Downsamples channels to 512
         image_features = self.change_channel_conv_image(image_features)
@@ -206,8 +225,16 @@ class TransfuserBackbone(nn.Module):
         lidar_features = torch.flatten(lidar_features, 1)
 
         fused_features = image_features + lidar_features
-
-        features = self.top_down(x4)
+        if self.head == "dyhead":
+            x = OrderedDict({
+                '0': lidar_features_output[-4],
+                '1': lidar_features_output[-3],
+                '2': lidar_features_output[-2],
+                '3': lidar_features_output[-1]
+            })
+            features = self.top_down(x)
+        else:
+            features = self.top_down(x4)
         return features, image_features_grid, fused_features
 
 
