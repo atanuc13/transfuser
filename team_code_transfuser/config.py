@@ -50,6 +50,17 @@ class GlobalConfig:
 
     backbone = 'transFuser'
 
+    # FPN and Object detection head config
+    head = 'centernet' # to choose object detection head - centernet/dyhead
+    dyHead_config = {
+        "num_blocks": 6,
+        "in_channels": [72, 216, 576, 1512],   # [72, 216, 576, 1512] for Regnet, [256, 512, 1024, 2048] for ResNext101
+        "out_channel": 256,
+        "L": 4,
+        "S": 576,
+        "C": 256
+    }
+
     # CenterNet parameters
     num_dir_bins = 12
     fp16_enabled = False

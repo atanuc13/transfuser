@@ -28,6 +28,9 @@ from mmdet.models.utils.gaussian_target import (get_local_maximum, get_topk_from
                                      transpose_and_gather_feat)
 from mmdet.models.dense_heads.base_dense_head import BaseDenseHead
 from mmdet.models.dense_heads.dense_test_mixins import BBoxTestMixin
+from collections import OrderedDict
+from dyhead import DyHead_Block
+from concat_fpn_output import concat_feature_maps
 
 
 @HEADS.register_module()
@@ -551,6 +554,13 @@ class LidarCenterNet(nn.Module):
         self.gru_concat_target_point = config.gru_concat_target_point
         self.use_point_pillars = config.use_point_pillars
 
+        if config.head == "dyhead":
+            self.concat_layer = concat_feature_maps()
+            self.dyHead_config = config.dyHead_config
+            self.dyhead_block = self.DyHead(num_blocks = self.dyHead_config['num_blocks'], L=self.dyHead_config['L'], S=self.dyHead_config['S'], C=self.dyHead_config['C']).to(self.device)
+            if self.dyHead_config['out_channel'] != self.config.channel:
+                self.change_channel_dyhead_output = nn.Conv2d(self.dyHead_config['out_channel'], config.channel, (1, 1)).to(self.device)
+
         if(self.use_point_pillars == True):
             self.point_pillar_net = PointPillarNet(config.num_input, config.num_features,
                                                    min_x = config.min_x, max_x = config.max_x,
@@ -579,7 +589,7 @@ class LidarCenterNet(nn.Module):
         channel = config.channel
 
         self.pred_bev = nn.Sequential(
-                            nn.Conv2d(channel, channel, kernel_size=(3, 3), stride=1, padding=(1, 1), bias=True),
+                            nn.Conv2d(self.dyHead_config['out_channel'] if config.head == "dyhead" else channel, channel, kernel_size=(3, 3), stride=1, padding=(1, 1), bias=True),
                             nn.ReLU(inplace=True),
                             nn.Conv2d(channel, 3, kernel_size=(1, 1), stride=1, padding=0, bias=True)
         ).to(self.device)
@@ -607,6 +617,11 @@ class LidarCenterNet(nn.Module):
         # pid controller
         self.turn_controller = PIDController(K_P=config.turn_KP, K_I=config.turn_KI, K_D=config.turn_KD, n=config.turn_n)
         self.speed_controller = PIDController(K_P=config.speed_KP, K_I=config.speed_KI, K_D=config.speed_KD, n=config.speed_n)
+
+    def DyHead(self, num_blocks, L, S, C):
+        blocks = [('Block_{}'.format(i+1),DyHead_Block(L, S, C)) for i in range(num_blocks)]
+
+        return nn.Sequential(OrderedDict(blocks))      
 
     def forward_gru(self, z, target_point):
         z = self.join(z)
@@ -705,7 +720,37 @@ class LidarCenterNet(nn.Module):
 
         pred_wp, _, _, _, _ = self.forward_gru(fused_features, target_point)
 
-        preds = self.head([features[0]])
+        if self.config.head == "dyhead":
+            features_dict = OrderedDict({
+                                '0': features[0], # (12, 64, 64, 64)
+                                '1': features[1], # (12, 64, 32, 32)
+                                '2': features[2], # (12, 64, 16, 16)
+                                '3': features[3]  # (12, 64, 8, 8)
+                            })
+
+            concatenated_features = self.concat_layer(features_dict) # (12, 4, 576, 64)
+
+            dyhead_block_output = self.dyhead_block(concatenated_features) # (12, 4, 576, 64)
+
+            b = dyhead_block_output.shape[0] # 12
+            w = int(pow(dyhead_block_output.shape[1] * dyhead_block_output.shape[2], 0.5)) # 48
+            c = dyhead_block_output.shape[3] # 64
+
+            dyhead_block_output = dyhead_block_output.permute(0, 3, 1, 2).contiguous().view(b, c, -1, w) # 12 64 48 48
+
+            dyhead_block_output = F.interpolate(dyhead_block_output,
+                                                size=(self.config.center_net_input_size, self.config.center_net_input_size),
+                                                mode='bilinear',
+                                                align_corners=False)    
+            
+            if self.config.dyHead_config['out_channel'] != self.config.channel:
+                dyhead_block_output = self.change_channel_dyhead_output(dyhead_block_output)
+
+            
+            preds = self.head([dyhead_block_output])
+        else:    
+            preds = self.head([features[0]])
+        
         results = self.head.get_bboxes(preds[0], preds[1], preds[2], preds[3], preds[4], preds[5], preds[6])
         bboxes, _ = results[0]
 
@@ -768,7 +813,37 @@ class LidarCenterNet(nn.Module):
             "loss_bev": loss_bev
         })
 
-        preds = self.head([features[0]])
+
+        if self.config.head == "dyhead":
+            features_dict = OrderedDict({
+                                '0': features[0], # (12, 64, 64, 64)
+                                '1': features[1], # (12, 64, 32, 32)
+                                '2': features[2], # (12, 64, 16, 16)
+                                '3': features[3]  # (12, 64, 8, 8)
+                            })
+
+            concatenated_features = self.concat_layer(features_dict) # (12, 4, 576, 64)
+
+            dyhead_block_output = self.dyhead_block(concatenated_features) # (12, 4, 576, 64)
+
+            b = dyhead_block_output.shape[0] # 12
+            w = int(pow(dyhead_block_output.shape[1] * dyhead_block_output.shape[2], 0.5)) # 48
+            c = dyhead_block_output.shape[3] # 64
+
+            dyhead_block_output = dyhead_block_output.permute(0, 3, 1, 2).contiguous().view(b, c, -1, w) # 12 64 48 48
+
+            dyhead_block_output = F.interpolate(dyhead_block_output,
+                                                size=(self.config.center_net_input_size, self.config.center_net_input_size),
+                                                mode='bilinear',
+                                                align_corners=False)    
+            
+            if self.config.dyHead_config['out_channel'] != self.config.channel:
+                dyhead_block_output = self.change_channel_dyhead_output(dyhead_block_output)
+
+            
+            preds = self.head([dyhead_block_output])
+        else:    
+            preds = self.head([features[0]])
 
         gt_labels = torch.zeros_like(label[:, :, 0])
         gt_bboxes_ignore = label.sum(dim=-1) == 0.

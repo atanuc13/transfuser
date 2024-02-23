@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=2,3 OMP_NUM_THREADS=16 OPENBLAS_NUM_THREADS=1 torchrun --nnodes=1 --nproc_per_node=2 --max_restarts=0 --rdzv_id=1234576890 --rdzv_backend=c10d /home/choyya/AV/transfuser_av/team_code_transfuser/train.py --logdir /home/choyya/AV/transfuser_av/log/ --root_dir /home/choyya/AV/transfuser/data/ --id exp_dyhead4 --parallel_training 1
