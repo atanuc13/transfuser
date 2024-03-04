@@ -50,6 +50,32 @@ class GlobalConfig:
 
     backbone = 'transFuser'
 
+    transformers = ['vit', 'vit', 'vit', 'vit']
+
+    transformer_input_size = [(64, 64), (32, 32), (16, 16), (8, 8)]   # used for matching the img size to lidar size then processed as input of transformer at diff stages
+
+    in_channels = [72, 216, 576, 1512]
+
+    vit_embd = [2 * in_channels[0], in_channels[1] // 2, in_channels[2] // 2, in_channels[3] // 8]    # [144, 108, 288, 189] for RegNet, [512, 256, 512, 256] for ResNext101, [96, 40, 112, 80] for efficientnet_b7
+    swin_embd = [in_channels[0], in_channels[1], in_channels[2] // 4, in_channels[3] // 4]            # [72, 216, 144, 378] for RegNet, [256, 512, 256, 512] for ResNext101
+
+
+    vit_config = {
+        "patch_size": [4, 4, 4, 2], 
+        "hidden_size": vit_embd,  # [144, 108, 288, 189] for RegNet, [512, 256, 512, 256]
+        "num_hidden_layers": 4,
+        "num_attention_heads": 4,
+        "intermediate_size": [4 * e for e in vit_embd], # 4 * hidden_size
+        "hidden_dropout_prob": 0.0,
+        "attention_probs_dropout_prob": 0.0,
+        "initializer_range": 0.02,
+        "image_size": [w[0] for w in transformer_input_size], # [64, 32, 16, 8]
+        "num_channels": [2 * c for c in in_channels],   # [144, 432, 1152, 3024] for RegNet, [512, 1024, 2048, 4096] for ResNext101
+        "qkv_bias": True,
+        "use_faster_attention": False,
+    }
+
+
     # CenterNet parameters
     num_dir_bins = 12
     fp16_enabled = False

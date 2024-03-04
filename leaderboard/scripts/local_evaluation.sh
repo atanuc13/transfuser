@@ -1,5 +1,5 @@
-export CARLA_ROOT=${1:-/home/kchitta/Documents/CARLA_0.9.10.1}
-export WORK_DIR=${2:-/home/kchitta/Documents/transfuser}
+export CARLA_ROOT=/home/choyya/AV/transfuser/carla
+export WORK_DIR=/home/choyya/AV/transfuser_av
 
 export CARLA_SERVER=${CARLA_ROOT}/CarlaUE4.sh
 export PYTHONPATH=$PYTHONPATH:${CARLA_ROOT}/PythonAPI
@@ -13,9 +13,9 @@ export SCENARIOS=${WORK_DIR}/leaderboard/data/longest6/eval_scenarios.json
 export ROUTES=${WORK_DIR}/leaderboard/data/longest6/longest6.xml
 export REPETITIONS=1
 export CHALLENGE_TRACK_CODENAME=SENSORS
-export CHECKPOINT_ENDPOINT=${WORK_DIR}/results/transfuser_longest6.json
+export CHECKPOINT_ENDPOINT=${WORK_DIR}/results/exp_vit/transfuser_longest6.json
 export TEAM_AGENT=${WORK_DIR}/team_code_transfuser/submission_agent.py
-export TEAM_CONFIG=${WORK_DIR}/model_ckpt/transfuser
+export TEAM_CONFIG=${WORK_DIR}/log/exp_vit/e
 export DEBUG_CHALLENGE=0
 export RESUME=1
 export DATAGEN=0

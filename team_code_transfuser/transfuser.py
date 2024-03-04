@@ -3,6 +3,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import timm
+from vit import ViT
 
 class TransfuserBackbone(nn.Module):
     """
@@ -16,6 +17,7 @@ class TransfuserBackbone(nn.Module):
         super().__init__()
         self.config = config
 
+        # if 'gpt' in self.config.transformers:
         self.avgpool_img = nn.AdaptiveAvgPool2d((self.config.img_vert_anchors, self.config.img_horz_anchors))
         self.avgpool_lidar = nn.AdaptiveAvgPool2d((self.config.lidar_vert_anchors, self.config.lidar_horz_anchors))
         
@@ -32,62 +34,19 @@ class TransfuserBackbone(nn.Module):
 
         self.lidar_encoder = LidarEncoder(architecture=lidar_architecture, in_channels=in_channels,
                                           out_features=self.config.perception_output_features)
+        
+        self.use_velocity = use_velocity
 
-        self.transformer1 = GPT(n_embd=self.image_encoder.features.feature_info[1]['num_chs'],
-                            n_head=config.n_head,
-                            block_exp=config.block_exp,
-                            n_layer=config.n_layer,
-                            img_vert_anchors=config.img_vert_anchors,
-                            img_horz_anchors=config.img_horz_anchors,
-                            lidar_vert_anchors=config.lidar_vert_anchors,
-                            lidar_horz_anchors=config.lidar_horz_anchors,
-                            seq_len=config.seq_len,
-                            embd_pdrop=config.embd_pdrop,
-                            attn_pdrop=config.attn_pdrop,
-                            resid_pdrop=config.resid_pdrop,
-                            config=config, use_velocity=use_velocity)
+        # self.transformers = [
+        #                     self.get_transformer(0),
+        #                     self.get_transformer(1),
+        #                     self.get_transformer(2),
+        #                     self.get_transformer(3),
+        #                 ]
+        self.transformers = nn.ModuleList([self.get_transformer(i) for i in range(4)])
 
-        self.transformer2 = GPT(n_embd=self.image_encoder.features.feature_info[2]['num_chs'],
-                            n_head=config.n_head,
-                            block_exp=config.block_exp,
-                            n_layer=config.n_layer,
-                            img_vert_anchors=config.img_vert_anchors,
-                            img_horz_anchors=config.img_horz_anchors,
-                            lidar_vert_anchors=config.lidar_vert_anchors,
-                            lidar_horz_anchors=config.lidar_horz_anchors,
-                            seq_len=config.seq_len,
-                            embd_pdrop=config.embd_pdrop,
-                            attn_pdrop=config.attn_pdrop,
-                            resid_pdrop=config.resid_pdrop,
-                            config=config, use_velocity=use_velocity)
-
-        self.transformer3 = GPT(n_embd=self.image_encoder.features.feature_info[3]['num_chs'],
-                            n_head=config.n_head,
-                            block_exp=config.block_exp,
-                            n_layer=config.n_layer,
-                            img_vert_anchors=config.img_vert_anchors,
-                            img_horz_anchors=config.img_horz_anchors,
-                            lidar_vert_anchors=config.lidar_vert_anchors,
-                            lidar_horz_anchors=config.lidar_horz_anchors,
-                            seq_len=config.seq_len,
-                            embd_pdrop=config.embd_pdrop,
-                            attn_pdrop=config.attn_pdrop,
-                            resid_pdrop=config.resid_pdrop,
-                            config=config, use_velocity=use_velocity)
-
-        self.transformer4 = GPT(n_embd=self.image_encoder.features.feature_info[4]['num_chs'],
-                            n_head=config.n_head,
-                            block_exp=config.block_exp,
-                            n_layer=config.n_layer,
-                            img_vert_anchors=config.img_vert_anchors,
-                            img_horz_anchors=config.img_horz_anchors,
-                            lidar_vert_anchors=config.lidar_vert_anchors,
-                            lidar_horz_anchors=config.lidar_horz_anchors,
-                            seq_len=config.seq_len,
-                            embd_pdrop=config.embd_pdrop,
-                            attn_pdrop=config.attn_pdrop,
-                            resid_pdrop=config.resid_pdrop,
-                            config=config, use_velocity=use_velocity)
+        # if 'gpt' not in self.config.transformers:
+        self.avgpool_img_layers = nn.ModuleList([nn.AdaptiveAvgPool2d(self.config.transformer_input_size[i]) for i in range(4)])
 
         if(self.image_encoder.features.feature_info[4]['num_chs'] != self.config.perception_output_features):
             self.change_channel_conv_image = nn.Conv2d(self.image_encoder.features.feature_info[4]['num_chs'], self.config.perception_output_features, (1, 1))
@@ -107,6 +66,27 @@ class TransfuserBackbone(nn.Module):
         
         # lateral
         self.c5_conv = nn.Conv2d(self.config.perception_output_features, channel, (1, 1))
+
+    def get_transformer(self, i):
+        if (self.config.transformers[i] == 'vit'):
+            return ViT(self.config, i + 1)
+        # elif (self.config.transformers[i] == 'swinT'):
+        #     return SwinTransformer(self.config, i)   
+        else:
+            return GPT(n_embd=self.image_encoder.features.feature_info[i + 1]['num_chs'],
+                                n_head=self.config.n_head,
+                                block_exp=self.config.block_exp,
+                                n_layer=self.config.n_layer,
+                                img_vert_anchors=self.config.img_vert_anchors,
+                                img_horz_anchors=self.config.img_horz_anchors,
+                                lidar_vert_anchors=self.config.lidar_vert_anchors,
+                                lidar_horz_anchors=self.config.lidar_horz_anchors,
+                                seq_len=self.config.seq_len,
+                                embd_pdrop=self.config.embd_pdrop,
+                                attn_pdrop=self.config.attn_pdrop,
+                                resid_pdrop=self.config.resid_pdrop,
+                                config=self.config, use_velocity=self.use_velocity)
+        
         
     def top_down(self, x):
 
@@ -116,6 +96,25 @@ class TransfuserBackbone(nn.Module):
         p2 = self.relu(self.up_conv3(self.upsample(p3)))
         
         return p2, p3, p4, p5
+    
+    def make_fusion(self, image_features, lidar_features, velocity, idx):
+        if(self.config.transformers[idx] == 'vit' or self.config.transformers[idx]  == 'swinT'):
+            imgH, imgW = image_features.size(2), image_features.size(3)
+            image_features = self.avgpool_img_layers[idx](image_features).to()
+            input = torch.cat((image_features, lidar_features), dim=1) 
+            image_features, lidar_features = self.transformers[idx](input)
+            image_features = F.interpolate(image_features, size=(imgH, imgW), mode='bilinear', align_corners=False)
+
+        else:
+            image_embd_layer1 = self.avgpool_img(image_features)
+            lidar_embd_layer1 = self.avgpool_lidar(lidar_features)
+
+            image_featuresx, lidar_featuresx = self.transformers[idx](image_embd_layer1, lidar_embd_layer1, velocity)
+            image_features = F.interpolate(image_featuresx, size=(image_features.shape[2],image_features.shape[3]), mode='bilinear', align_corners=False)
+            lidar_features = F.interpolate(lidar_featuresx, size=(lidar_features.shape[2],lidar_features.shape[3]), mode='bilinear', align_corners=False)
+
+        return image_features, lidar_features     
+
 
     def forward(self, image, lidar, velocity):
         '''
@@ -147,12 +146,13 @@ class TransfuserBackbone(nn.Module):
 
         # Image fusion at (B, 72, 40, 176)
         # Lidar fusion at (B, 72, 64, 64)
-        image_embd_layer1 = self.avgpool_img(image_features)
-        lidar_embd_layer1 = self.avgpool_lidar(lidar_features)
+        # image_embd_layer1 = self.avgpool_img(image_features)
+        # lidar_embd_layer1 = self.avgpool_lidar(lidar_features)
 
-        image_features_layer1, lidar_features_layer1 = self.transformer1(image_embd_layer1, lidar_embd_layer1, velocity)
-        image_features_layer1 = F.interpolate(image_features_layer1, size=(image_features.shape[2],image_features.shape[3]), mode='bilinear', align_corners=False)
-        lidar_features_layer1 = F.interpolate(lidar_features_layer1, size=(lidar_features.shape[2],lidar_features.shape[3]), mode='bilinear', align_corners=False)
+        # image_features_layer1, lidar_features_layer1 = self.transformer1(image_embd_layer1, lidar_embd_layer1, velocity)
+        # image_features_layer1 = F.interpolate(image_features_layer1, size=(image_features.shape[2],image_features.shape[3]), mode='bilinear', align_corners=False)
+        # lidar_features_layer1 = F.interpolate(lidar_features_layer1, size=(lidar_features.shape[2],lidar_features.shape[3]), mode='bilinear', align_corners=False)
+        image_features_layer1, lidar_features_layer1 = self.make_fusion(image_features, lidar_features, velocity, 0)
         image_features = image_features + image_features_layer1
         lidar_features = lidar_features + lidar_features_layer1
 
@@ -160,11 +160,12 @@ class TransfuserBackbone(nn.Module):
         lidar_features = self.lidar_encoder._model.layer2(lidar_features)
         # Image fusion at (B, 216, 20, 88)
         # Image fusion at (B, 216, 32, 32)
-        image_embd_layer2 = self.avgpool_img(image_features)
-        lidar_embd_layer2 = self.avgpool_lidar(lidar_features)
-        image_features_layer2, lidar_features_layer2 = self.transformer2(image_embd_layer2, lidar_embd_layer2, velocity)
-        image_features_layer2 = F.interpolate(image_features_layer2, size=(image_features.shape[2],image_features.shape[3]), mode='bilinear', align_corners=False)
-        lidar_features_layer2 = F.interpolate(lidar_features_layer2, size=(lidar_features.shape[2],lidar_features.shape[3]), mode='bilinear', align_corners=False)
+        # image_embd_layer2 = self.avgpool_img(image_features)
+        # lidar_embd_layer2 = self.avgpool_lidar(lidar_features)
+        # image_features_layer2, lidar_features_layer2 = self.transformer2(image_embd_layer2, lidar_embd_layer2, velocity)
+        # image_features_layer2 = F.interpolate(image_features_layer2, size=(image_features.shape[2],image_features.shape[3]), mode='bilinear', align_corners=False)
+        # lidar_features_layer2 = F.interpolate(lidar_features_layer2, size=(lidar_features.shape[2],lidar_features.shape[3]), mode='bilinear', align_corners=False)
+        image_features_layer2, lidar_features_layer2 = self.make_fusion(image_features, lidar_features, velocity, 1)
         image_features = image_features + image_features_layer2
         lidar_features = lidar_features + lidar_features_layer2
 
@@ -172,11 +173,12 @@ class TransfuserBackbone(nn.Module):
         lidar_features = self.lidar_encoder._model.layer3(lidar_features)
         # Image fusion at (B, 576, 10, 44)
         # Image fusion at (B, 576, 16, 16)
-        image_embd_layer3 = self.avgpool_img(image_features)
-        lidar_embd_layer3 = self.avgpool_lidar(lidar_features)
-        image_features_layer3, lidar_features_layer3 = self.transformer3(image_embd_layer3, lidar_embd_layer3, velocity)
-        image_features_layer3 = F.interpolate(image_features_layer3, size=(image_features.shape[2],image_features.shape[3]), mode='bilinear', align_corners=False)
-        lidar_features_layer3 = F.interpolate(lidar_features_layer3, size=(lidar_features.shape[2],lidar_features.shape[3]), mode='bilinear', align_corners=False)
+        # image_embd_layer3 = self.avgpool_img(image_features)
+        # lidar_embd_layer3 = self.avgpool_lidar(lidar_features)
+        # image_features_layer3, lidar_features_layer3 = self.transformer3(image_embd_layer3, lidar_embd_layer3, velocity)
+        # image_features_layer3 = F.interpolate(image_features_layer3, size=(image_features.shape[2],image_features.shape[3]), mode='bilinear', align_corners=False)
+        # lidar_features_layer3 = F.interpolate(lidar_features_layer3, size=(lidar_features.shape[2],lidar_features.shape[3]), mode='bilinear', align_corners=False)
+        image_features_layer3, lidar_features_layer3 = self.make_fusion(image_features, lidar_features, velocity, 2)
         image_features = image_features + image_features_layer3
         lidar_features = lidar_features + lidar_features_layer3
 
@@ -184,12 +186,13 @@ class TransfuserBackbone(nn.Module):
         lidar_features = self.lidar_encoder._model.layer4(lidar_features)
         # Image fusion at (B, 1512, 5, 22)
         # Image fusion at (B, 1512, 8, 8)
-        image_embd_layer4 = self.avgpool_img(image_features)
-        lidar_embd_layer4 = self.avgpool_lidar(lidar_features)
+        # image_embd_layer4 = self.avgpool_img(image_features)
+        # lidar_embd_layer4 = self.avgpool_lidar(lidar_features)
 
-        image_features_layer4, lidar_features_layer4 = self.transformer4(image_embd_layer4, lidar_embd_layer4, velocity)
-        image_features_layer4 = F.interpolate(image_features_layer4, size=(image_features.shape[2],image_features.shape[3]), mode='bilinear', align_corners=False)
-        lidar_features_layer4 = F.interpolate(lidar_features_layer4, size=(lidar_features.shape[2],lidar_features.shape[3]), mode='bilinear', align_corners=False)
+        # image_features_layer4, lidar_features_layer4 = self.transformer4(image_embd_layer4, lidar_embd_layer4, velocity)
+        # image_features_layer4 = F.interpolate(image_features_layer4, size=(image_features.shape[2],image_features.shape[3]), mode='bilinear', align_corners=False)
+        # lidar_features_layer4 = F.interpolate(lidar_features_layer4, size=(lidar_features.shape[2],lidar_features.shape[3]), mode='bilinear', align_corners=False)
+        image_features_layer4, lidar_features_layer4 = self.make_fusion(image_features, lidar_features, velocity, 3)
         image_features = image_features + image_features_layer4
         lidar_features = lidar_features + lidar_features_layer4
 
